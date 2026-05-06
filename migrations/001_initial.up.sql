@@ -3,7 +3,7 @@
 -- PostgreSQL 16
 
 -- 1. Users
-CREATE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email VARCHAR(255) UNIQUE NOT NULL,
     password_hash VARCHAR(255) NOT NULL,
@@ -13,7 +13,7 @@ CREATE TABLE users (
 );
 
 -- 2. Threads Accounts
-CREATE TABLE threads_accounts (
+CREATE TABLE IF NOT EXISTS threads_accounts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     threads_user_id VARCHAR(100),
@@ -26,7 +26,7 @@ CREATE TABLE threads_accounts (
 );
 
 -- 3. Products
-CREATE TABLE products (
+CREATE TABLE IF NOT EXISTS products (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name VARCHAR(500),
@@ -39,7 +39,7 @@ CREATE TABLE products (
 );
 
 -- 4. Affiliate Links
-CREATE TABLE affiliate_links (
+CREATE TABLE IF NOT EXISTS affiliate_links (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     product_id UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
     original_url TEXT NOT NULL,
@@ -51,7 +51,7 @@ CREATE TABLE affiliate_links (
 );
 
 -- 5. Posts
-CREATE TABLE posts (
+CREATE TABLE IF NOT EXISTS posts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     account_id UUID NOT NULL REFERENCES threads_accounts(id) ON DELETE CASCADE,
     link_id UUID REFERENCES affiliate_links(id) ON DELETE SET NULL,
@@ -67,7 +67,7 @@ CREATE TABLE posts (
 );
 
 -- 6. Post Analytics
-CREATE TABLE post_analytics (
+CREATE TABLE IF NOT EXISTS post_analytics (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     post_id UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
     views INT DEFAULT 0,
@@ -79,7 +79,7 @@ CREATE TABLE post_analytics (
 );
 
 -- 7. Click Logs
-CREATE TABLE click_logs (
+CREATE TABLE IF NOT EXISTS click_logs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     link_id UUID NOT NULL REFERENCES affiliate_links(id) ON DELETE CASCADE,
     hashed_ip VARCHAR(64),
@@ -89,7 +89,7 @@ CREATE TABLE click_logs (
 );
 
 -- 8. Circuit Breaker
-CREATE TABLE circuit_breaker (
+CREATE TABLE IF NOT EXISTS circuit_breaker (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     account_id UUID NOT NULL REFERENCES threads_accounts(id) ON DELETE CASCADE,
     event_type VARCHAR(50),
@@ -98,8 +98,8 @@ CREATE TABLE circuit_breaker (
 );
 
 -- Indexes
-CREATE INDEX idx_users_email ON users(email);
-CREATE INDEX idx_affiliate_links_short_slug ON affiliate_links(short_slug);
-CREATE INDEX idx_posts_status_scheduled_at ON posts(status, scheduled_at);
-CREATE INDEX idx_posts_account_id ON posts(account_id);
-CREATE INDEX idx_click_logs_link_id_created_at ON click_logs(link_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE INDEX IF NOT EXISTS idx_affiliate_links_short_slug ON affiliate_links(short_slug);
+CREATE INDEX IF NOT EXISTS idx_posts_status_scheduled_at ON posts(status, scheduled_at);
+CREATE INDEX IF NOT EXISTS idx_posts_account_id ON posts(account_id);
+CREATE INDEX IF NOT EXISTS idx_click_logs_link_id_created_at ON click_logs(link_id, created_at);

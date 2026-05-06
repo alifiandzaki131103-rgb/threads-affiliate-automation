@@ -41,9 +41,10 @@ func Connect(cfg *config.Config) (*pgxpool.Pool, error) {
 	return pool, nil
 }
 
-// RunMigrations reads .sql files from the specified directory and executes them in order.
+// RunMigrations reads .up.sql files from the specified directory and executes them in order.
+// Only runs files ending in .up.sql to avoid executing down migrations.
 func RunMigrations(pool *pgxpool.Pool, dir string) error {
-	sqlFiles, err := filepath.Glob(filepath.Join(dir, "*.sql"))
+	sqlFiles, err := filepath.Glob(filepath.Join(dir, "*.up.sql"))
 	if err != nil {
 		return fmt.Errorf("failed to read migration files: %w", err)
 	}
