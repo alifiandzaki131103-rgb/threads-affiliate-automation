@@ -40,3 +40,4 @@ logs/
 # OpenCode sessions
 .sisyphus/
 .opencode/
+__pycache__/
