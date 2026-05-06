@@ -19,7 +19,7 @@ func main() {
 	cfg := config.Load()
 
 	rdb := redis.NewClient(&redis.Options{
-		Addr:     fmt.Sprintf("%s:%d", cfg.Redis.Host, cfg.Redis.Port),
+		Addr:     fmt.Sprintf("%s:%s", cfg.Redis.Host, cfg.Redis.Port),
 		Password: cfg.Redis.Password,
 		DB:       cfg.Redis.DB,
 	})
@@ -58,7 +58,7 @@ func main() {
 		return c.Redirect(originalURL, http.StatusMovedPermanently)
 	})
 
-	addr := fmt.Sprintf(":%d", cfg.Shortener.Port)
+	addr := fmt.Sprintf(":%s", cfg.Shortener.Port)
 	fmt.Printf("🔗 URL Shortener starting on %s\n", addr)
 	if err := app.Listen(addr); err != nil {
 		log.Fatalf("Failed to start shortener: %v", err)

@@ -37,7 +37,7 @@ func main() {
 
 	// Connect to Redis
 	rdb := redis.NewClient(&redis.Options{
-		Addr:     fmt.Sprintf("%s:%d", cfg.Redis.Host, cfg.Redis.Port),
+		Addr:     fmt.Sprintf("%s:%s", cfg.Redis.Host, cfg.Redis.Port),
 		Password: cfg.Redis.Password,
 		DB:       cfg.Redis.DB,
 	})
@@ -89,7 +89,7 @@ func main() {
 	}()
 
 	// Start server
-	addr := fmt.Sprintf(":%d", cfg.App.Port)
+	addr := fmt.Sprintf(":%s", cfg.App.Port)
 	fmt.Printf("🚀 Threads Affiliate API starting on %s (env: %s)\n", addr, cfg.App.Env)
 	if err := app.Listen(addr); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
