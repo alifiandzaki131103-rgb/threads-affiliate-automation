@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -65,8 +67,8 @@ func Resolve(ctx context.Context, rdb *redis.Client, slug string) (originalURL s
 	return originalURL, linkID, nil
 }
 
-// TrackClick appends click tracking data for a link ID as JSON in Redis.
-func TrackClick(ctx context.Context, rdb *redis.Client, linkID string, hashedIP string, userAgent string, referrer string) error {
+// TrackClick appends click tracking data for a link ID as JSON in Redis and persists it to PostgreSQL.
+func TrackClick(ctx context.Context, rdb *redis.Client, pool *pgxpool.Pool, linkID string, hashedIP string, userAgent string, referrer string) error {
 	data := ClickData{
 		LinkID:    linkID,
 		HashedIP:  hashedIP,
@@ -80,7 +82,46 @@ func TrackClick(ctx context.Context, rdb *redis.Client, linkID string, hashedIP 
 		return err
 	}
 
-	return rdb.LPush(ctx, clicksKey(linkID), payload).Err()
+	redisErr := rdb.LPush(ctx, clicksKey(linkID), payload).Err()
+
+	// Persist to PostgreSQL if pool is available
+	if pool == nil {
+		return redisErr
+	}
+
+	parsedLinkID, err := uuid.Parse(linkID)
+	if err != nil {
+		return fmt.Errorf("invalid link id: %w", err)
+	}
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO click_logs (id, link_id, hashed_ip, user_agent, referrer, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, uuid.New(), parsedLinkID, hashedIP, userAgent, referrer, data.Timestamp)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.Exec(ctx, `
+		UPDATE affiliate_links
+		SET click_count = click_count + 1
+		WHERE id = $1
+	`, parsedLinkID)
+	if err != nil {
+		return err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+
+	return redisErr
 }
 
 func linkKey(slug string) string {

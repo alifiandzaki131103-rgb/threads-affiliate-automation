@@ -78,10 +78,17 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - SHORTENER_PORT=8082
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=threads_affiliate
+      - DB_PASSWORD=ThreadsAff2026!
+      - DB_NAME=threads_affiliate
+      - DB_SSLMODE=disable
     ports:
       - "127.0.0.1:8082:8082"
     depends_on:
       - redis
+      - postgres
     restart: unless-stopped
 
   ai-service:

@@ -67,6 +67,7 @@ func main() {
 	// Handlers
 	authHandler := handler.NewAuthHandler(pool, cfg)
 	linkHandler := handler.NewLinkHandler(pool, rdb, cfg.AI.APIURL)
+	dashHandler := handler.NewDashboardHandler(pool)
 
 	aiClient := ai.NewClient(cfg.AI.APIURL)
 	queueClient := queue.NewClient(fmt.Sprintf("%s:%s", cfg.Redis.Host, cfg.Redis.Port))
@@ -85,6 +86,7 @@ func main() {
 	protected.Post("/links/bulk", linkHandler.BulkAddLinks)
 	protected.Get("/links", linkHandler.ListLinks)
 	protected.Delete("/links/:id", linkHandler.DeleteLink)
+	protected.Get("/dashboard", dashHandler.GetStats)
 
 	protected.Post("/accounts", accountHandler.CreateAccount)
 	protected.Get("/accounts", accountHandler.ListAccounts)

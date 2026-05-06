@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/alifiandzaki131103-rgb/threads-affiliate-automation/internal/config"
+	"github.com/alifiandzaki131103-rgb/threads-affiliate-automation/internal/database"
 	"github.com/alifiandzaki131103-rgb/threads-affiliate-automation/internal/shortener"
 )
 
@@ -23,6 +25,12 @@ func main() {
 		Password: cfg.Redis.Password,
 		DB:       cfg.Redis.DB,
 	})
+
+	// Connect to PostgreSQL for click persistence
+	pool, err := database.Connect(cfg)
+	if err != nil {
+		log.Printf("⚠️  PostgreSQL connection failed (clicks won't persist): %v", err)
+	}
 
 	app := fiber.New(fiber.Config{
 		AppName: "threads-affiliate-shortener",
@@ -36,11 +44,11 @@ func main() {
 	})
 
 	// Redirect endpoint (supports both /s/:slug and /go/:slug)
-	app.Get("/s/:slug", func(c *fiber.Ctx) error {
+	redirectHandler := func(c *fiber.Ctx) error {
 		slug := c.Params("slug")
 
 		originalURL, linkID, err := shortener.Resolve(c.Context(), rdb, slug)
-		if err != nil {
+		if err != nil || originalURL == "" {
 			return c.Status(http.StatusNotFound).JSON(fiber.Map{"error": "link not found"})
 		}
 
@@ -51,34 +59,15 @@ func main() {
 		referrer := c.Get("Referer")
 
 		go func() {
-			_ = shortener.TrackClick(c.Context(), rdb, linkID, hashedIP, userAgent, referrer)
+			_ = shortener.TrackClick(context.Background(), rdb, pool, linkID, hashedIP, userAgent, referrer)
 		}()
 
 		// 301 redirect
 		return c.Redirect(originalURL, http.StatusMovedPermanently)
-	})
+	}
 
-	app.Get("/go/:slug", func(c *fiber.Ctx) error {
-		slug := c.Params("slug")
-
-		originalURL, linkID, err := shortener.Resolve(c.Context(), rdb, slug)
-		if err != nil {
-			return c.Status(http.StatusNotFound).JSON(fiber.Map{"error": "link not found"})
-		}
-
-		// Track click asynchronously
-		ip := c.IP()
-		hashedIP := hashIP(ip)
-		userAgent := c.Get("User-Agent")
-		referrer := c.Get("Referer")
-
-		go func() {
-			_ = shortener.TrackClick(c.Context(), rdb, linkID, hashedIP, userAgent, referrer)
-		}()
-
-		// 301 redirect
-		return c.Redirect(originalURL, http.StatusMovedPermanently)
-	})
+	app.Get("/s/:slug", redirectHandler)
+	app.Get("/go/:slug", redirectHandler)
 
 	addr := fmt.Sprintf(":%s", cfg.Shortener.Port)
 	fmt.Printf("🔗 URL Shortener starting on %s\n", addr)
