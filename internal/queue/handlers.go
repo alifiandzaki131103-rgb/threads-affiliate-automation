@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/hibiken/asynq"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/alifiandzaki131103-rgb/threads-affiliate-automation/internal/ai"
 	"github.com/alifiandzaki131103-rgb/threads-affiliate-automation/internal/config"
+	"github.com/alifiandzaki131103-rgb/threads-affiliate-automation/internal/repository"
 	"github.com/alifiandzaki131103-rgb/threads-affiliate-automation/internal/threads"
 )
 
@@ -45,8 +48,10 @@ func (h *Handlers) RegisterHandlers(mux *asynq.ServeMux) {
 	mux.HandleFunc(TaskCheckReplies, h.HandleCheckReplies)
 	mux.HandleFunc(TaskCollectAnalytics, h.HandleCollectAnalytics)
 	mux.HandleFunc(TaskHealthCheckLinks, h.HandleHealthCheckLinks)
+	mux.HandleFunc(TaskLinkHealthCheck, h.HandleLinkHealthCheck)
 	mux.HandleFunc(TaskWeeklyLearning, h.HandleWeeklyLearning)
 	mux.HandleFunc(TaskAutoPublish, h.HandleAutoPublish)
+	mux.HandleFunc(TaskAutoReply, h.HandleAutoReply)
 }
 
 // HandleGenerateContent generates AI content for a product link
@@ -244,6 +249,80 @@ func (h *Handlers) HandleHealthCheckLinks(ctx context.Context, t *asynq.Task) er
 	return nil
 }
 
+// HandleLinkHealthCheck performs comprehensive health checks on all active affiliate links.
+// For each link, it does an HTTP HEAD request and updates health_status accordingly.
+func (h *Handlers) HandleLinkHealthCheck(ctx context.Context, t *asynq.Task) error {
+	log.Println("[LinkHealthCheck] Starting link health check for all active links...")
+
+	// Get all active links from the database
+	links, err := repository.GetAllActiveLinks(ctx, h.pool)
+	if err != nil {
+		return fmt.Errorf("get active links: %w", err)
+	}
+
+	if len(links) == 0 {
+		log.Println("[LinkHealthCheck] No active links to check")
+		return nil
+	}
+
+	// Create HTTP client with timeout and redirect limit
+	httpClient := &http.Client{
+		Timeout: 10 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 3 {
+				return fmt.Errorf("too many redirects (max 3)")
+			}
+			return nil
+		},
+	}
+
+	var healthy, broken, unreachable int
+
+	for _, link := range links {
+		// Determine health status via HTTP HEAD request
+		healthStatus := checkLinkHealth(httpClient, link.OriginalURL)
+
+		// Update the link health in the database
+		if err := repository.UpdateLinkHealth(ctx, h.pool, link.ID, healthStatus); err != nil {
+			log.Printf("[LinkHealthCheck] ERROR updating health for link %s: %v", link.ID, err)
+			continue
+		}
+
+		switch healthStatus {
+		case "healthy":
+			healthy++
+		case "broken":
+			broken++
+		case "unreachable":
+			unreachable++
+		}
+	}
+
+	log.Printf("[LinkHealthCheck] Completed: %d healthy, %d broken, %d unreachable (total: %d)",
+		healthy, broken, unreachable, len(links))
+	return nil
+}
+
+// checkLinkHealth performs an HTTP HEAD request and returns the health status string.
+func checkLinkHealth(client *http.Client, url string) string {
+	req, err := http.NewRequest(http.MethodHead, url, nil)
+	if err != nil {
+		return "unreachable"
+	}
+	req.Header.Set("User-Agent", "ThreadsAffiliate-HealthCheck/1.0")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "unreachable"
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 200 && resp.StatusCode <= 399 {
+		return "healthy"
+	}
+	return "broken"
+}
+
 // HandleWeeklyLearning runs the self-learning AI analysis (weekly)
 func (h *Handlers) HandleWeeklyLearning(ctx context.Context, t *asynq.Task) error {
 	log.Println("[WeeklyLearning] Running weekly self-learning analysis...")
@@ -353,6 +432,133 @@ func (h *Handlers) HandleAutoPublish(ctx context.Context, t *asynq.Task) error {
 	}
 
 	log.Printf("[AutoPublish] Done processing %d posts", len(duePosts))
+	return nil
+}
+
+// HandleAutoReply monitors replies on published posts and auto-responds with affiliate links
+func (h *Handlers) HandleAutoReply(ctx context.Context, t *asynq.Task) error {
+	var payload AutoReplyPayload
+	if err := json.Unmarshal(t.Payload(), &payload); err != nil {
+		return fmt.Errorf("unmarshal payload: %w", err)
+	}
+
+	log.Printf("[AutoReply] Processing post %s for account %s", payload.PostID, payload.AccountID)
+
+	// Get post details (thread_id and affiliate link)
+	var threadID string
+	var shortSlug *string
+	err := h.pool.QueryRow(ctx, `
+		SELECT p.thread_id, al.short_slug
+		FROM posts p
+		LEFT JOIN affiliate_links al ON p.link_id = al.id
+		WHERE p.id = $1 AND p.thread_id IS NOT NULL`,
+		payload.PostID).Scan(&threadID, &shortSlug)
+	if err != nil {
+		return fmt.Errorf("query post: %w", err)
+	}
+
+	// Get account access token and threads_user_id
+	var accessToken, threadsUserID string
+	err = h.pool.QueryRow(ctx, `
+		SELECT access_token, threads_user_id FROM threads_accounts WHERE id = $1`,
+		payload.AccountID).Scan(&accessToken, &threadsUserID)
+	if err != nil {
+		return fmt.Errorf("query account: %w", err)
+	}
+
+	// Build the short URL for the reply
+	shortURL := ""
+	if shortSlug != nil {
+		shortURL = fmt.Sprintf("https://%s/%s", h.cfg.Shortener.Domain, *shortSlug)
+	}
+	if shortURL == "" {
+		log.Printf("[AutoReply] No affiliate link found for post %s, skipping", payload.PostID)
+		return nil
+	}
+
+	// Fetch replies from Threads API
+	client := threads.NewClient(accessToken)
+	replies, err := client.GetReplies(ctx, threadID)
+	if err != nil {
+		return fmt.Errorf("get replies: %w", err)
+	}
+
+	if len(replies) == 0 {
+		log.Printf("[AutoReply] No replies found for post %s", payload.PostID)
+		return nil
+	}
+
+	// Trigger phrases to match
+	triggerPhrases := []string{
+		"beli dimana",
+		"link dong",
+		"mau dong",
+		"dimana belinya",
+		"link nya",
+		"linknya",
+		"where to buy",
+	}
+
+	// Natural reply templates
+	replyTemplates := []string{
+		"Nih linknya: %s 👆",
+		"Cek sini: %s",
+		"Langsung aja: %s ✨",
+		"Ini dia: %s 🔗",
+	}
+
+	redisKey := fmt.Sprintf("replied:%s", payload.PostID)
+	repliedCount := 0
+
+	for _, reply := range replies {
+		// Check if already replied to this comment
+		alreadyReplied, err := h.rdb.SIsMember(ctx, redisKey, reply.ID).Result()
+		if err != nil {
+			log.Printf("[AutoReply] Redis error checking reply %s: %v", reply.ID, err)
+			continue
+		}
+		if alreadyReplied {
+			continue
+		}
+
+		// Check if reply text matches any trigger phrase
+		lowerText := strings.ToLower(reply.Text)
+		matched := false
+		for _, trigger := range triggerPhrases {
+			if strings.Contains(lowerText, trigger) {
+				matched = true
+				break
+			}
+		}
+
+		if !matched {
+			continue
+		}
+
+		// Pick a reply template (rotate based on count)
+		template := replyTemplates[repliedCount%len(replyTemplates)]
+		replyText := fmt.Sprintf(template, shortURL)
+
+		// Send reply via Threads API
+		_, err = client.ReplyToThread(ctx, threadsUserID, reply.ID, replyText)
+		if err != nil {
+			log.Printf("[AutoReply] ERROR replying to %s: %v", reply.ID, err)
+			continue
+		}
+
+		// Mark as replied in Redis
+		h.rdb.SAdd(ctx, redisKey, reply.ID)
+		// Set expiry on the set (7 days)
+		h.rdb.Expire(ctx, redisKey, 7*24*time.Hour)
+
+		repliedCount++
+		log.Printf("[AutoReply] Replied to %s (@%s) on post %s", reply.ID, reply.Username, payload.PostID)
+
+		// Small delay between replies for anti-detection
+		time.Sleep(time.Duration(2+rand.Intn(3)) * time.Second)
+	}
+
+	log.Printf("[AutoReply] Done. Replied to %d comments on post %s", repliedCount, payload.PostID)
 	return nil
 }
 

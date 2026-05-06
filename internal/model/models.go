@@ -46,14 +46,16 @@ type Product struct {
 
 // AffiliateLink represents a tracked affiliate link
 type AffiliateLink struct {
-	ID          uuid.UUID `json:"id" db:"id"`
-	ProductID   uuid.UUID `json:"product_id" db:"product_id"`
-	OriginalURL string    `json:"original_url" db:"original_url"`
-	ShortSlug   string    `json:"short_slug" db:"short_slug"` // unique
-	Platform    string    `json:"platform" db:"platform"`
-	Status      string    `json:"status" db:"status"` // active, expired
-	ClickCount  int       `json:"click_count" db:"click_count"`
-	CreatedAt   time.Time `json:"created_at" db:"created_at"`
+	ID            uuid.UUID  `json:"id" db:"id"`
+	ProductID     uuid.UUID  `json:"product_id" db:"product_id"`
+	OriginalURL   string     `json:"original_url" db:"original_url"`
+	ShortSlug     string     `json:"short_slug" db:"short_slug"` // unique
+	Platform      string     `json:"platform" db:"platform"`
+	Status        string     `json:"status" db:"status"` // active, expired
+	ClickCount    int        `json:"click_count" db:"click_count"`
+	HealthStatus  string     `json:"health_status" db:"health_status"`
+	LastCheckedAt *time.Time `json:"last_checked_at,omitempty" db:"last_checked_at"`
+	CreatedAt     time.Time  `json:"created_at" db:"created_at"`
 }
 
 // Post represents a scheduled or published Threads post
@@ -92,6 +94,18 @@ type ClickLog struct {
 	UserAgent string    `json:"user_agent" db:"user_agent"`
 	Referrer  string    `json:"referrer" db:"referrer"`
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
+}
+
+// ABTest represents an A/B test comparing two post variants
+type ABTest struct {
+	ID             uuid.UUID  `json:"id" db:"id"`
+	LinkID         uuid.UUID  `json:"link_id" db:"link_id"`
+	VariantAPostID *uuid.UUID `json:"variant_a_post_id" db:"variant_a_post_id"`
+	VariantBPostID *uuid.UUID `json:"variant_b_post_id" db:"variant_b_post_id"`
+	Winner         *string    `json:"winner" db:"winner"`
+	Status         string     `json:"status" db:"status"`
+	CreatedAt      time.Time  `json:"created_at" db:"created_at"`
+	CompletedAt    *time.Time `json:"completed_at" db:"completed_at"`
 }
 
 // CircuitBreaker represents a safety circuit breaker event for an account

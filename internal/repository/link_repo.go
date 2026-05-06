@@ -143,3 +143,35 @@ func DeleteLinkByUser(ctx context.Context, pool *pgxpool.Pool, linkID, userID uu
 	}
 	return nil
 }
+
+// GetAllActiveLinks returns all affiliate links with status 'active'.
+func GetAllActiveLinks(ctx context.Context, pool *pgxpool.Pool) ([]model.AffiliateLink, error) {
+	rows, err := pool.Query(ctx, `
+		SELECT id, original_url FROM affiliate_links WHERE status = 'active'
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("query active links: %w", err)
+	}
+	defer rows.Close()
+
+	var links []model.AffiliateLink
+	for rows.Next() {
+		var link model.AffiliateLink
+		if err := rows.Scan(&link.ID, &link.OriginalURL); err != nil {
+			return nil, fmt.Errorf("scan link: %w", err)
+		}
+		links = append(links, link)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
+	}
+	return links, nil
+}
+
+// UpdateLinkHealth updates the health_status and last_checked_at for a link.
+func UpdateLinkHealth(ctx context.Context, pool *pgxpool.Pool, linkID uuid.UUID, healthStatus string) error {
+	_, err := pool.Exec(ctx, `
+		UPDATE affiliate_links SET health_status = $1, last_checked_at = NOW() WHERE id = $2
+	`, healthStatus, linkID)
+	return err
+}

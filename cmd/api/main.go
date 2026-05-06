@@ -98,6 +98,8 @@ func main() {
 
 	protected.Get("/posts", postHandler.ListPosts)
 	protected.Post("/posts/generate", postHandler.GenerateContent)
+	protected.Post("/posts/ab-test", postHandler.CreateABTest)
+	protected.Get("/posts/ab-tests", postHandler.ListABTests)
 	protected.Post("/posts/:id/approve", postHandler.ApprovePost)
 	protected.Post("/posts/:id/publish", postHandler.PublishNow)
 

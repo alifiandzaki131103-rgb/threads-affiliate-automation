@@ -113,6 +113,37 @@ func (c *ThreadsClient) ReplyToThread(ctx context.Context, userID string, replyT
 	return response.ID, nil
 }
 
+// Reply represents a single reply to a Threads post.
+type Reply struct {
+	ID       string `json:"id"`
+	Text     string `json:"text"`
+	Username string `json:"username"`
+}
+
+type repliesResponse struct {
+	Data []Reply `json:"data"`
+}
+
+// GetReplies fetches replies for a given thread post.
+func (c *ThreadsClient) GetReplies(ctx context.Context, threadID string) ([]Reply, error) {
+	query := url.Values{}
+	query.Set("fields", "id,text,username")
+	query.Set("access_token", c.accessToken)
+
+	requestURL := fmt.Sprintf("%s/%s/replies?%s", baseURL, url.PathEscape(threadID), query.Encode())
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create get replies request: %w", err)
+	}
+
+	var response repliesResponse
+	if err := c.do(req, &response); err != nil {
+		return nil, err
+	}
+
+	return response.Data, nil
+}
+
 func (c *ThreadsClient) postForm(ctx context.Context, requestURL string, form url.Values, target interface{}) error {
 	body := form.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, strings.NewReader(body))

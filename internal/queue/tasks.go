@@ -18,8 +18,10 @@ const (
 	TaskCheckReplies     = "engagement:check_replies"
 	TaskCollectAnalytics = "analytics:collect"
 	TaskHealthCheckLinks = "links:health_check"
+	TaskLinkHealthCheck  = "link:health_check"
 	TaskWeeklyLearning   = "ai:weekly_learning"
 	TaskAutoPublish      = "auto:publish"
+	TaskAutoReply        = "auto:reply"
 )
 
 // GenerateContentPayload is the payload for content generation tasks
@@ -79,8 +81,31 @@ func NewReplyDropTask(payload *ReplyDropPayload, delay time.Duration) (*asynq.Ta
 	return asynq.NewTask(TaskReplyDrop, data, asynq.MaxRetry(2), asynq.Timeout(30*time.Second), asynq.ProcessIn(delay)), nil
 }
 
+// AutoReplyPayload is the payload for auto-reply tasks
+type AutoReplyPayload struct {
+	AccountID uuid.UUID `json:"account_id"`
+	PostID    uuid.UUID `json:"post_id"`
+}
+
+// NewAutoReplyTask creates a new auto-reply task
+func NewAutoReplyTask(payload *AutoReplyPayload) (*asynq.Task, error) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("marshal payload: %w", err)
+	}
+	return asynq.NewTask(TaskAutoReply, data, asynq.MaxRetry(2), asynq.Timeout(60*time.Second)), nil
+}
+
 // AutoPublishPayload is the payload for auto-publish tasks (can be empty for periodic)
 type AutoPublishPayload struct{}
+
+// LinkHealthCheckPayload is the payload for link health check tasks (empty, runs for all links)
+type LinkHealthCheckPayload struct{}
+
+// NewLinkHealthCheckTask creates a periodic task to check affiliate link health
+func NewLinkHealthCheckTask() *asynq.Task {
+	return asynq.NewTask(TaskLinkHealthCheck, nil, asynq.MaxRetry(1), asynq.Timeout(120*time.Second))
+}
 
 // NewAutoPublishTask creates a periodic task to auto-publish approved posts on schedule
 func NewAutoPublishTask() *asynq.Task {
