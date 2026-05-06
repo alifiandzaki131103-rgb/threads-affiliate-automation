@@ -18,15 +18,17 @@ type User struct {
 
 // ThreadsAccount represents a connected Threads social media account
 type ThreadsAccount struct {
-	ID            uuid.UUID `json:"id" db:"id"`
-	UserID        uuid.UUID `json:"user_id" db:"user_id"`
-	ThreadsUserID string    `json:"threads_user_id" db:"threads_user_id"`
-	AccessToken   string    `json:"-" db:"access_token"`   // encrypted
-	RefreshToken  string    `json:"-" db:"refresh_token"`
-	Persona       string    `json:"persona" db:"persona"`
-	Niche         string    `json:"niche" db:"niche"`
-	Status        string    `json:"status" db:"status"` // active, paused, flagged
-	CreatedAt     time.Time `json:"created_at" db:"created_at"`
+	ID                uuid.UUID  `json:"id" db:"id"`
+	UserID            uuid.UUID  `json:"user_id" db:"user_id"`
+	ThreadsUserID     string     `json:"threads_user_id" db:"threads_user_id"`
+	AccessToken       string     `json:"-" db:"access_token"`   // encrypted
+	RefreshToken      string     `json:"-" db:"refresh_token"`
+	Persona           string     `json:"persona" db:"persona"`
+	Niche             string     `json:"niche" db:"niche"`
+	Status            string     `json:"status" db:"status"` // active, paused, flagged
+	AutoMode          bool       `json:"auto_mode" db:"auto_mode"`
+	AutoModeEnabledAt *time.Time `json:"auto_mode_enabled_at,omitempty" db:"auto_mode_enabled_at"`
+	CreatedAt         time.Time  `json:"created_at" db:"created_at"`
 }
 
 // Product represents an affiliate product

@@ -46,6 +46,7 @@ func (h *Handlers) RegisterHandlers(mux *asynq.ServeMux) {
 	mux.HandleFunc(TaskCollectAnalytics, h.HandleCollectAnalytics)
 	mux.HandleFunc(TaskHealthCheckLinks, h.HandleHealthCheckLinks)
 	mux.HandleFunc(TaskWeeklyLearning, h.HandleWeeklyLearning)
+	mux.HandleFunc(TaskAutoPublish, h.HandleAutoPublish)
 }
 
 // HandleGenerateContent generates AI content for a product link
@@ -254,6 +255,104 @@ func (h *Handlers) HandleWeeklyLearning(ctx context.Context, t *asynq.Task) erro
 	// - Generate weekly report
 
 	log.Println("[WeeklyLearning] Analysis complete (placeholder)")
+	return nil
+}
+
+// HandleAutoPublish publishes approved posts that are due (periodic task)
+func (h *Handlers) HandleAutoPublish(ctx context.Context, t *asynq.Task) error {
+	log.Println("[AutoPublish] Checking for approved posts due for publishing...")
+
+	// Query posts with status='approved' and scheduled_at <= now()
+	rows, err := h.pool.Query(ctx, `
+		SELECT p.id, p.account_id, p.content
+		FROM posts p
+		JOIN threads_accounts ta ON p.account_id = ta.id
+		WHERE p.status = 'approved'
+		AND p.scheduled_at <= NOW()
+		AND ta.auto_mode = true
+		ORDER BY p.scheduled_at ASC
+		LIMIT 10`)
+	if err != nil {
+		return fmt.Errorf("query due posts: %w", err)
+	}
+	defer rows.Close()
+
+	type duePost struct {
+		ID        string
+		AccountID string
+		Content   string
+	}
+
+	var duePosts []duePost
+	for rows.Next() {
+		var p duePost
+		if err := rows.Scan(&p.ID, &p.AccountID, &p.Content); err != nil {
+			return fmt.Errorf("scan post: %w", err)
+		}
+		duePosts = append(duePosts, p)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("rows error: %w", err)
+	}
+
+	if len(duePosts) == 0 {
+		log.Println("[AutoPublish] No posts due for publishing")
+		return nil
+	}
+
+	log.Printf("[AutoPublish] Found %d posts due for publishing", len(duePosts))
+
+	for _, p := range duePosts {
+		// Get account details for Threads API credentials
+		var threadsUserID, accessToken string
+		err := h.pool.QueryRow(ctx, `
+			SELECT threads_user_id, access_token FROM threads_accounts WHERE id = $1`,
+			p.AccountID).Scan(&threadsUserID, &accessToken)
+		if err != nil {
+			log.Printf("[AutoPublish] ERROR fetching account %s: %v", p.AccountID, err)
+			continue
+		}
+
+		// Create Threads client and publish
+		client := threads.NewClient(accessToken)
+
+		// Add random delay for anti-detection (2-10 seconds between posts)
+		delay := time.Duration(2+rand.Intn(8)) * time.Second
+		time.Sleep(delay)
+
+		// Step 1: Create container
+		containerID, err := client.CreateContainer(ctx, threadsUserID, p.Content)
+		if err != nil {
+			log.Printf("[AutoPublish] ERROR creating container for post %s: %v", p.ID, err)
+			h.updatePostStatus(ctx, p.ID, "failed")
+			continue
+		}
+
+		// Wait for container processing
+		time.Sleep(3 * time.Second)
+
+		// Step 2: Publish
+		threadID, err := client.PublishContainer(ctx, threadsUserID, containerID)
+		if err != nil {
+			log.Printf("[AutoPublish] ERROR publishing post %s: %v", p.ID, err)
+			h.updatePostStatus(ctx, p.ID, "failed")
+			continue
+		}
+
+		// Step 3: Update post status to published
+		_, err = h.pool.Exec(ctx, `
+			UPDATE posts SET status = 'published', thread_id = $1, published_at = NOW()
+			WHERE id = $2`,
+			threadID, p.ID)
+		if err != nil {
+			log.Printf("[AutoPublish] ERROR updating post %s status: %v", p.ID, err)
+			continue
+		}
+
+		log.Printf("[AutoPublish] Post %s published as thread %s", p.ID, threadID)
+	}
+
+	log.Printf("[AutoPublish] Done processing %d posts", len(duePosts))
 	return nil
 }
 

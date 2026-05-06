@@ -87,9 +87,10 @@ func (h *AccountHandler) UpdateAccount(c *fiber.Ctx) error {
 	}
 
 	var req struct {
-		Persona string `json:"persona"`
-		Niche   string `json:"niche"`
-		Status  string `json:"status"`
+		Persona  string `json:"persona"`
+		Niche    string `json:"niche"`
+		Status   string `json:"status"`
+		AutoMode *bool  `json:"auto_mode"`
 	}
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "invalid request body"})
@@ -104,6 +105,13 @@ func (h *AccountHandler) UpdateAccount(c *fiber.Ctx) error {
 			return c.Status(http.StatusNotFound).JSON(fiber.Map{"error": "account not found"})
 		}
 		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "failed to update account"})
+	}
+
+	// Update auto_mode if provided
+	if req.AutoMode != nil {
+		if err := repository.UpdateAccountAutoMode(c.Context(), h.pool, accountID, userID, *req.AutoMode); err != nil {
+			return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "failed to update auto_mode"})
+		}
 	}
 
 	return c.JSON(fiber.Map{"message": "account updated"})

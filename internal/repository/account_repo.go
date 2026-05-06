@@ -84,6 +84,23 @@ func UpdateAccount(ctx context.Context, pool *pgxpool.Pool, id, userID uuid.UUID
 	return nil
 }
 
+func UpdateAccountAutoMode(ctx context.Context, pool *pgxpool.Pool, id, userID uuid.UUID, autoMode bool) error {
+	var query string
+	if autoMode {
+		query = `UPDATE threads_accounts SET auto_mode = true, auto_mode_enabled_at = NOW() WHERE id = $1 AND user_id = $2`
+	} else {
+		query = `UPDATE threads_accounts SET auto_mode = false, auto_mode_enabled_at = NULL WHERE id = $1 AND user_id = $2`
+	}
+	result, err := pool.Exec(ctx, query, id, userID)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
 func DeleteAccount(ctx context.Context, pool *pgxpool.Pool, id, userID uuid.UUID) error {
 	result, err := pool.Exec(ctx, `DELETE FROM threads_accounts WHERE id = $1 AND user_id = $2`, id, userID)
 	if err != nil {

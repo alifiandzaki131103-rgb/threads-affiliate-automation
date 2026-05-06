@@ -66,11 +66,12 @@ func main() {
 
 	// Handlers
 	authHandler := handler.NewAuthHandler(pool, cfg)
-	linkHandler := handler.NewLinkHandler(pool, rdb, cfg.AI.APIURL)
 	dashHandler := handler.NewDashboardHandler(pool)
+	analyticsHandler := handler.NewAnalyticsHandler(pool)
 
 	aiClient := ai.NewClient(cfg.AI.APIURL)
 	queueClient := queue.NewClient(fmt.Sprintf("%s:%s", cfg.Redis.Host, cfg.Redis.Port))
+	linkHandler := handler.NewLinkHandler(pool, rdb, cfg.AI.APIURL, queueClient)
 	accountHandler := handler.NewAccountHandler(pool)
 	postHandler := handler.NewPostHandler(pool, rdb, aiClient, queueClient)
 
@@ -84,9 +85,11 @@ func main() {
 	protected := api.Group("", middleware.AuthRequired(cfg.JWT.Secret))
 	protected.Post("/links", linkHandler.AddLink)
 	protected.Post("/links/bulk", linkHandler.BulkAddLinks)
+	protected.Post("/links/csv", linkHandler.CSVUpload)
 	protected.Get("/links", linkHandler.ListLinks)
 	protected.Delete("/links/:id", linkHandler.DeleteLink)
 	protected.Get("/dashboard", dashHandler.GetStats)
+	protected.Get("/analytics", analyticsHandler.GetClickAnalytics)
 
 	protected.Post("/accounts", accountHandler.CreateAccount)
 	protected.Get("/accounts", accountHandler.ListAccounts)

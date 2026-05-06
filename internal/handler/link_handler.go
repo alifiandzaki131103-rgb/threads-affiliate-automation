@@ -2,10 +2,14 @@ package handler
 
 import (
 	"bytes"
+	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,18 +19,24 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/alifiandzaki131103-rgb/threads-affiliate-automation/internal/model"
+	"github.com/alifiandzaki131103-rgb/threads-affiliate-automation/internal/queue"
 	"github.com/alifiandzaki131103-rgb/threads-affiliate-automation/internal/repository"
 	"github.com/alifiandzaki131103-rgb/threads-affiliate-automation/internal/shortener"
 )
 
 type LinkHandler struct {
-	pool     *pgxpool.Pool
-	rdb      *redis.Client
-	aiAPIURL string
+	pool        *pgxpool.Pool
+	rdb         *redis.Client
+	aiAPIURL    string
+	queueClient *queue.Client
 }
 
-func NewLinkHandler(pool *pgxpool.Pool, rdb *redis.Client, aiAPIURL string) *LinkHandler {
-	return &LinkHandler{pool: pool, rdb: rdb, aiAPIURL: aiAPIURL}
+func NewLinkHandler(pool *pgxpool.Pool, rdb *redis.Client, aiAPIURL string, queueClient ...*queue.Client) *LinkHandler {
+	h := &LinkHandler{pool: pool, rdb: rdb, aiAPIURL: aiAPIURL}
+	if len(queueClient) > 0 {
+		h.queueClient = queueClient[0]
+	}
+	return h
 }
 
 func detectPlatform(url string) string {
@@ -168,6 +178,11 @@ func (h *LinkHandler) AddLink(c *fiber.Ctx) error {
 		_ = err
 	}
 
+	// Auto-generate content if user has auto_mode enabled
+	if h.queueClient != nil {
+		go h.autoGenerateForLink(context.Background(), userID, link.ID, productName, price, category, platform, slug)
+	}
+
 	return c.Status(http.StatusCreated).JSON(fiber.Map{
 		"id":           link.ID,
 		"product_id":   product.ID,
@@ -283,4 +298,204 @@ func (h *LinkHandler) DeleteLink(c *fiber.Ctx) error {
 	}
 
 	return c.SendStatus(http.StatusNoContent)
+}
+
+func (h *LinkHandler) CSVUpload(c *fiber.Ctx) error {
+	userID := GetUserID(c)
+	if userID == uuid.Nil {
+		return c.Status(http.StatusUnauthorized).JSON(fiber.Map{"error": "unauthorized"})
+	}
+
+	// Parse multipart form file
+	fileHeader, err := c.FormFile("file")
+	if err != nil {
+		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "file is required"})
+	}
+
+	file, err := fileHeader.Open()
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "failed to open file"})
+	}
+	defer file.Close()
+
+	// Read CSV
+	reader := csv.NewReader(file)
+
+	// Read header row
+	header, err := reader.Read()
+	if err != nil {
+		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "failed to read CSV header"})
+	}
+
+	// Map header columns to indices
+	colIndex := make(map[string]int)
+	for i, col := range header {
+		colIndex[strings.TrimSpace(strings.ToLower(col))] = i
+	}
+
+	if _, ok := colIndex["url"]; !ok {
+		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "CSV must have a 'url' column"})
+	}
+
+	type csvResult struct {
+		ID          string  `json:"id"`
+		ProductName string  `json:"product_name"`
+		OriginalURL string  `json:"original_url"`
+		ShortSlug   string  `json:"short_slug"`
+		Platform    string  `json:"platform"`
+		Price       float64 `json:"price,omitempty"`
+		Category    string  `json:"category,omitempty"`
+	}
+
+	var (
+		total   int
+		success int
+		failed  int
+		links   []csvResult
+	)
+
+	for {
+		record, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			failed++
+			total++
+			continue
+		}
+
+		total++
+		if total > 100 {
+			break
+		}
+
+		// Extract URL
+		url := strings.TrimSpace(record[colIndex["url"]])
+		if url == "" {
+			failed++
+			continue
+		}
+
+		// Extract optional fields
+		productName := ""
+		if idx, ok := colIndex["product_name"]; ok && idx < len(record) {
+			productName = strings.TrimSpace(record[idx])
+		}
+
+		category := ""
+		if idx, ok := colIndex["category"]; ok && idx < len(record) {
+			category = strings.TrimSpace(record[idx])
+		}
+
+		var price float64
+		if idx, ok := colIndex["price"]; ok && idx < len(record) {
+			if p, err := strconv.ParseFloat(strings.TrimSpace(record[idx]), 64); err == nil {
+				price = p
+			}
+		}
+
+		platform := detectPlatform(url)
+
+		// Use provided name or default
+		if productName == "" {
+			productName = "Unknown Product"
+		}
+
+		// Create product
+		product := &model.Product{
+			UserID:   userID,
+			Name:     productName,
+			Price:    price,
+			Category: category,
+			Platform: platform,
+			Status:   "active",
+		}
+
+		if err := repository.CreateProduct(c.Context(), h.pool, product); err != nil {
+			failed++
+			continue
+		}
+
+		// Generate short slug
+		slug := shortener.GenerateSlug(6)
+
+		// Create affiliate link
+		link := &model.AffiliateLink{
+			ProductID:   product.ID,
+			OriginalURL: url,
+			ShortSlug:   slug,
+			Platform:    platform,
+			Status:      "active",
+			ClickCount:  0,
+		}
+
+		if err := repository.CreateLink(c.Context(), h.pool, link); err != nil {
+			failed++
+			continue
+		}
+
+		// Register in Redis for fast redirect
+		_ = shortener.RegisterLink(c.Context(), h.rdb, slug, url, link.ID.String())
+
+		success++
+		links = append(links, csvResult{
+			ID:          link.ID.String(),
+			ProductName: productName,
+			OriginalURL: url,
+			ShortSlug:   slug,
+			Platform:    platform,
+			Price:       price,
+			Category:    category,
+		})
+	}
+
+	return c.Status(http.StatusCreated).JSON(fiber.Map{
+		"total":   total,
+		"success": success,
+		"failed":  failed,
+		"links":   links,
+	})
+}
+
+// autoGenerateForLink checks if the user has an account with auto_mode enabled,
+// and if so, enqueues a content generation task for the new link.
+func (h *LinkHandler) autoGenerateForLink(ctx context.Context, userID, linkID uuid.UUID, productName string, price float64, category, platform, slug string) {
+	// Find user's first account with auto_mode enabled
+	var accountID uuid.UUID
+	err := h.pool.QueryRow(ctx, `
+		SELECT id FROM threads_accounts
+		WHERE user_id = $1 AND auto_mode = true AND status = 'active'
+		LIMIT 1`, userID).Scan(&accountID)
+	if err != nil {
+		// No auto_mode account found, skip silently
+		return
+	}
+
+	shortURL := "https://affiliate.billingku.online/s/" + slug
+
+	payload := &queue.GenerateContentPayload{
+		LinkID:      linkID,
+		ProductName: productName,
+		Price:       price,
+		Category:    category,
+		Platform:    platform,
+		ShortURL:    shortURL,
+		UserID:      userID,
+		AccountID:   accountID,
+	}
+
+	task, err := queue.NewGenerateContentTask(payload)
+	if err != nil {
+		log.Printf("[AutoGenerate] Failed to create task for link %s: %v", linkID, err)
+		return
+	}
+
+	_, err = h.queueClient.Enqueue(task)
+	if err != nil {
+		log.Printf("[AutoGenerate] Failed to enqueue task for link %s: %v", linkID, err)
+		return
+	}
+
+	log.Printf("[AutoGenerate] Content generation queued for link %s (auto_mode)", linkID)
 }

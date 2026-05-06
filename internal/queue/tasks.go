@@ -12,13 +12,14 @@ import (
 
 // Task types
 const (
-	TaskGenerateContent = "content:generate"
-	TaskPublishPost     = "post:publish"
-	TaskReplyDrop       = "post:reply_drop"
-	TaskCheckReplies    = "engagement:check_replies"
+	TaskGenerateContent  = "content:generate"
+	TaskPublishPost      = "post:publish"
+	TaskReplyDrop        = "post:reply_drop"
+	TaskCheckReplies     = "engagement:check_replies"
 	TaskCollectAnalytics = "analytics:collect"
 	TaskHealthCheckLinks = "links:health_check"
-	TaskWeeklyLearning  = "ai:weekly_learning"
+	TaskWeeklyLearning   = "ai:weekly_learning"
+	TaskAutoPublish      = "auto:publish"
 )
 
 // GenerateContentPayload is the payload for content generation tasks
@@ -78,6 +79,14 @@ func NewReplyDropTask(payload *ReplyDropPayload, delay time.Duration) (*asynq.Ta
 	return asynq.NewTask(TaskReplyDrop, data, asynq.MaxRetry(2), asynq.Timeout(30*time.Second), asynq.ProcessIn(delay)), nil
 }
 
+// AutoPublishPayload is the payload for auto-publish tasks (can be empty for periodic)
+type AutoPublishPayload struct{}
+
+// NewAutoPublishTask creates a periodic task to auto-publish approved posts on schedule
+func NewAutoPublishTask() *asynq.Task {
+	return asynq.NewTask(TaskAutoPublish, nil, asynq.MaxRetry(2), asynq.Timeout(120*time.Second))
+}
+
 // NewCheckRepliesTask creates a periodic task to check for new replies
 func NewCheckRepliesTask() *asynq.Task {
 	return asynq.NewTask(TaskCheckReplies, nil, asynq.MaxRetry(1), asynq.Timeout(30*time.Second))
@@ -110,6 +119,12 @@ func (s *Scheduler) RegisterPeriodicTasks() error {
 	_, err := s.scheduler.Register("*/10 * * * *", NewCheckRepliesTask())
 	if err != nil {
 		return fmt.Errorf("register check_replies: %w", err)
+	}
+
+	// Auto-publish approved posts every 5 minutes
+	_, err = s.scheduler.Register("*/5 * * * *", NewAutoPublishTask())
+	if err != nil {
+		return fmt.Errorf("register auto_publish: %w", err)
 	}
 
 	// Collect analytics every 4 hours
