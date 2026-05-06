@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/alifiandzaki131103-rgb/threads-affiliate-automation/internal/model"
 	"github.com/google/uuid"
@@ -126,4 +127,19 @@ func CreateProduct(ctx context.Context, pool *pgxpool.Pool, product *model.Produ
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING id
 	`, product.UserID, product.Name, product.Price, product.Category, product.Platform, product.ImageURL, product.Status).Scan(&product.ID)
+}
+
+// DeleteLinkByUser deletes an affiliate link owned by the given user.
+func DeleteLinkByUser(ctx context.Context, pool *pgxpool.Pool, linkID, userID uuid.UUID) error {
+	result, err := pool.Exec(ctx, `
+		DELETE FROM affiliate_links
+		WHERE id = $1 AND product_id IN (SELECT id FROM products WHERE user_id = $2)
+	`, linkID, userID)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("link not found or not owned by user")
+	}
+	return nil
 }

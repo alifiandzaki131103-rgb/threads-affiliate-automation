@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 
 from generator import ContentGenerator
+from url_resolver import resolve_product_url
 
 load_dotenv()
 
@@ -147,6 +148,17 @@ async def list_formats():
             {"id": "question_trigger", "description": "No link, triggers 'where to buy' comments"},
         ]
     }
+
+
+class ResolveURLRequest(BaseModel):
+    url: str
+
+
+@app.post("/resolve-url")
+async def resolve_url(req: ResolveURLRequest):
+    """Resolve a Shopee/TikTok URL to extract product info."""
+    result = resolve_product_url(req.url)
+    return result
 
 
 if __name__ == "__main__":

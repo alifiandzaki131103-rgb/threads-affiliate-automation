@@ -105,8 +105,8 @@ func (h *Handlers) HandlePublishPost(ctx context.Context, t *asynq.Task) error {
 
 	log.Printf("[PublishPost] Publishing post %s", payload.PostID)
 
-	// Random delay 0-120 seconds (anti-detection)
-	delay := time.Duration(rand.Intn(120)) * time.Second
+	// Random delay 5-25 seconds (anti-detection, within timeout)
+	delay := time.Duration(5+rand.Intn(20)) * time.Second
 	time.Sleep(delay)
 
 	// Create Threads client
@@ -115,6 +115,7 @@ func (h *Handlers) HandlePublishPost(ctx context.Context, t *asynq.Task) error {
 	// Step 1: Create container
 	containerID, err := client.CreateContainer(ctx, payload.ThreadsUserID, payload.Content)
 	if err != nil {
+		log.Printf("[PublishPost] ERROR creating container for post %s: %v", payload.PostID, err)
 		// Update post status to failed
 		h.updatePostStatus(ctx, payload.PostID, "failed")
 		return fmt.Errorf("create container: %w", err)
@@ -126,6 +127,7 @@ func (h *Handlers) HandlePublishPost(ctx context.Context, t *asynq.Task) error {
 	// Step 2: Publish
 	threadID, err := client.PublishContainer(ctx, payload.ThreadsUserID, containerID)
 	if err != nil {
+		log.Printf("[PublishPost] ERROR publishing container for post %s: %v", payload.PostID, err)
 		h.updatePostStatus(ctx, payload.PostID, "failed")
 		return fmt.Errorf("publish container: %w", err)
 	}

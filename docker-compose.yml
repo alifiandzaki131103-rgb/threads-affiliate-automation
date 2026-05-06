@@ -89,9 +89,9 @@ services:
       context: ./ai-service
       dockerfile: ../deployments/Dockerfile.ai
     environment:
-      - AI_API_KEY=${AI_API_KEY:-}
-      - AI_API_URL=${AI_API_URL:-http://localhost:1430/v1}
-      - AI_MODEL=${AI_MODEL:-claude-sonnet-4}
+      - AI_API_KEY=enx-97ccb3d49fe4f1a13b5c484db004a92b6893b631fbd14a415273469a0ca5b1ac
+      - AI_API_URL=http://103.55.252.13:1430/v1
+      - AI_MODEL=gpt-5.5
       - AI_SERVICE_PORT=8081
     ports:
       - "127.0.0.1:8081:8081"

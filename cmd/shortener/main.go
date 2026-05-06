@@ -35,7 +35,29 @@ func main() {
 		return c.JSON(fiber.Map{"status": "ok", "service": "shortener"})
 	})
 
-	// Redirect endpoint
+	// Redirect endpoint (supports both /s/:slug and /go/:slug)
+	app.Get("/s/:slug", func(c *fiber.Ctx) error {
+		slug := c.Params("slug")
+
+		originalURL, linkID, err := shortener.Resolve(c.Context(), rdb, slug)
+		if err != nil {
+			return c.Status(http.StatusNotFound).JSON(fiber.Map{"error": "link not found"})
+		}
+
+		// Track click asynchronously
+		ip := c.IP()
+		hashedIP := hashIP(ip)
+		userAgent := c.Get("User-Agent")
+		referrer := c.Get("Referer")
+
+		go func() {
+			_ = shortener.TrackClick(c.Context(), rdb, linkID, hashedIP, userAgent, referrer)
+		}()
+
+		// 301 redirect
+		return c.Redirect(originalURL, http.StatusMovedPermanently)
+	})
+
 	app.Get("/go/:slug", func(c *fiber.Ctx) error {
 		slug := c.Params("slug")
 

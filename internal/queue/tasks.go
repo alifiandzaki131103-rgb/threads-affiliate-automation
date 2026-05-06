@@ -66,7 +66,7 @@ func NewPublishPostTask(payload *PublishPostPayload, publishAt time.Time) (*asyn
 	if err != nil {
 		return nil, fmt.Errorf("marshal payload: %w", err)
 	}
-	return asynq.NewTask(TaskPublishPost, data, asynq.MaxRetry(2), asynq.Timeout(30*time.Second), asynq.ProcessAt(publishAt)), nil
+	return asynq.NewTask(TaskPublishPost, data, asynq.MaxRetry(3), asynq.Timeout(60*time.Second), asynq.ProcessAt(publishAt)), nil
 }
 
 // NewReplyDropTask creates a delayed reply task (5-15 min after publish)

@@ -1,8 +1,13 @@
 package handler
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -15,12 +20,13 @@ import (
 )
 
 type LinkHandler struct {
-	pool *pgxpool.Pool
-	rdb  *redis.Client
+	pool     *pgxpool.Pool
+	rdb      *redis.Client
+	aiAPIURL string
 }
 
-func NewLinkHandler(pool *pgxpool.Pool, rdb *redis.Client) *LinkHandler {
-	return &LinkHandler{pool: pool, rdb: rdb}
+func NewLinkHandler(pool *pgxpool.Pool, rdb *redis.Client, aiAPIURL string) *LinkHandler {
+	return &LinkHandler{pool: pool, rdb: rdb, aiAPIURL: aiAPIURL}
 }
 
 func detectPlatform(url string) string {
@@ -32,6 +38,54 @@ func detectPlatform(url string) string {
 		return "tiktok"
 	}
 	return "unknown"
+}
+
+// resolveProductURL calls AI service to extract product info from URL
+func (h *LinkHandler) resolveProductURL(url string) (name string, price float64, category string) {
+	name = "Unknown Product"
+	price = 0
+	category = ""
+
+	if h.aiAPIURL == "" {
+		return
+	}
+
+	type resolveReq struct {
+		URL string `json:"url"`
+	}
+	type resolveResp struct {
+		ProductName string  `json:"product_name"`
+		Price       float64 `json:"price"`
+		Category    string  `json:"category"`
+		Resolved    bool    `json:"resolved"`
+	}
+
+	body, _ := json.Marshal(resolveReq{URL: url})
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Post(h.aiAPIURL+"/resolve-url", "application/json", bytes.NewReader(body))
+	if err != nil {
+		log.Printf("[ResolveURL] Failed to call AI service: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return
+	}
+
+	var result resolveResp
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return
+	}
+
+	if result.Resolved && result.ProductName != "" {
+		name = result.ProductName
+		price = result.Price
+		category = result.Category
+		log.Printf("[ResolveURL] Detected: %s (%.0f) [%s]", name, price, category)
+	}
+
+	return
 }
 
 func (h *LinkHandler) AddLink(c *fiber.Ctx) error {
@@ -51,20 +105,31 @@ func (h *LinkHandler) AddLink(c *fiber.Ctx) error {
 
 	platform := detectPlatform(req.URL)
 
-	// Create product
+	// Try auto-detect product info if not provided
 	productName := "Unknown Product"
+	var price float64
+	category := ""
+
 	if req.ProductName != nil && *req.ProductName != "" {
 		productName = *req.ProductName
 	}
-
-	var price float64
 	if req.Price != nil {
 		price = *req.Price
 	}
-
-	category := ""
 	if req.Category != nil {
 		category = *req.Category
+	}
+
+	// Auto-resolve if product name not provided
+	if productName == "Unknown Product" {
+		resolvedName, resolvedPrice, resolvedCategory := h.resolveProductURL(req.URL)
+		productName = resolvedName
+		if price == 0 {
+			price = resolvedPrice
+		}
+		if category == "" {
+			category = resolvedCategory
+		}
 	}
 
 	product := &model.Product{
@@ -106,6 +171,9 @@ func (h *LinkHandler) AddLink(c *fiber.Ctx) error {
 	return c.Status(http.StatusCreated).JSON(fiber.Map{
 		"id":           link.ID,
 		"product_id":   product.ID,
+		"product_name": productName,
+		"price":        price,
+		"category":     category,
 		"original_url": link.OriginalURL,
 		"short_slug":   link.ShortSlug,
 		"platform":     link.Platform,
@@ -139,11 +207,21 @@ func (h *LinkHandler) BulkAddLinks(c *fiber.Ctx) error {
 		platform := detectPlatform(url)
 		slug := shortener.GenerateSlug(6)
 
+		// Auto-resolve product info
+		productName, price, category := h.resolveProductURL(url)
+
+		status := "active"
+		if productName == "Unknown Product" {
+			status = "needs_info"
+		}
+
 		product := &model.Product{
 			UserID:   userID,
-			Name:     "Unknown Product",
+			Name:     productName,
+			Price:    price,
+			Category: category,
 			Platform: platform,
-			Status:   "needs_info",
+			Status:   status,
 		}
 		_ = repository.CreateProduct(c.Context(), h.pool, product)
 
@@ -159,6 +237,7 @@ func (h *LinkHandler) BulkAddLinks(c *fiber.Ctx) error {
 
 		results = append(results, fiber.Map{
 			"id":           link.ID,
+			"product_name": productName,
 			"original_url": url,
 			"short_slug":   slug,
 			"platform":     platform,
@@ -199,9 +278,9 @@ func (h *LinkHandler) DeleteLink(c *fiber.Ctx) error {
 		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "invalid link id"})
 	}
 
-	// TODO: verify ownership before delete
-	_ = linkID
-	_ = userID
+	if err := repository.DeleteLinkByUser(c.Context(), h.pool, linkID, userID); err != nil {
+		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": fmt.Sprintf("failed to delete link: %v", err)})
+	}
 
 	return c.SendStatus(http.StatusNoContent)
 }

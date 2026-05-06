@@ -66,7 +66,7 @@ func main() {
 
 	// Handlers
 	authHandler := handler.NewAuthHandler(pool, cfg)
-	linkHandler := handler.NewLinkHandler(pool, rdb)
+	linkHandler := handler.NewLinkHandler(pool, rdb, cfg.AI.APIURL)
 
 	aiClient := ai.NewClient(cfg.AI.APIURL)
 	queueClient := queue.NewClient(fmt.Sprintf("%s:%s", cfg.Redis.Host, cfg.Redis.Port))
