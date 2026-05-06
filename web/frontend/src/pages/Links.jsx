@@ -51,9 +51,17 @@ export default function Links() {
   };
 
   const copySlug = (slug) => {
-    navigator.clipboard.writeText(`${window.location.origin}/go/${slug}`);
-    setMessage('📋 Short URL copied!');
-    setTimeout(() => setMessage(''), 2000);
+    navigator.clipboard.writeText(`${window.location.origin}/s/${slug}`);
+  };
+
+  const handleDelete = async (id) => {
+    if (!confirm('Hapus link ini?')) return;
+    try {
+      await api.delete(`/links/${id}`);
+      loadLinks();
+    } catch (err) {
+      alert('Gagal hapus link');
+    }
   };
 
   return (
@@ -147,7 +155,7 @@ export default function Links() {
                       className="flex items-center gap-1 text-sm text-indigo-400 hover:text-indigo-300"
                     >
                       <Copy size={12} />
-                      /go/{link.short_slug}
+                      /s/{link.short_slug}
                     </button>
                   </td>
                   <td className="px-4 py-3">
@@ -172,7 +180,7 @@ export default function Links() {
                     </span>
                   </td>
                   <td className="px-4 py-3">
-                    <button className="text-gray-500 hover:text-red-400 transition">
+                    <button onClick={() => handleDelete(link.id)} className="text-gray-500 hover:text-red-400 transition">
                       <Trash2 size={16} />
                     </button>
                   </td>
