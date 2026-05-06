@@ -1,0 +1,104 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: threads_affiliate
+      POSTGRES_PASSWORD: ThreadsAff2026!
+      POSTGRES_DB: threads_affiliate
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5433:5432"
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redisdata:/data
+    ports:
+      - "127.0.0.1:6380:6379"
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: deployments/Dockerfile.api
+    environment:
+      - APP_NAME=threads-affiliate
+      - APP_ENV=production
+      - APP_PORT=8080
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=threads_affiliate
+      - DB_PASSWORD=ThreadsAff2026!
+      - DB_NAME=threads_affiliate
+      - DB_SSLMODE=disable
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - JWT_SECRET=${JWT_SECRET:-change-this-jwt-secret-in-production}
+      - AI_API_URL=http://ai-service:8081
+      - SHORTENER_DOMAIN=${SHORTENER_DOMAIN:-go.yourdomain.com}
+      - SHORTENER_PORT=8082
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-change-this-32-byte-key-here!!!}
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: deployments/Dockerfile.worker
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=threads_affiliate
+      - DB_PASSWORD=ThreadsAff2026!
+      - DB_NAME=threads_affiliate
+      - DB_SSLMODE=disable
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - AI_API_URL=http://ai-service:8081
+      - JWT_SECRET=${JWT_SECRET:-change-this-jwt-secret-in-production}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-change-this-32-byte-key-here!!!}
+    depends_on:
+      - postgres
+      - redis
+      - ai-service
+    restart: unless-stopped
+
+  shortener:
+    build:
+      context: .
+      dockerfile: deployments/Dockerfile.shortener
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - SHORTENER_PORT=8082
+    ports:
+      - "127.0.0.1:8082:8082"
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  ai-service:
+    build:
+      context: ./ai-service
+      dockerfile: ../deployments/Dockerfile.ai
+    environment:
+      - AI_API_KEY=${AI_API_KEY:-}
+      - AI_API_URL=${AI_API_URL:-http://localhost:1430/v1}
+      - AI_MODEL=${AI_MODEL:-claude-sonnet-4}
+      - AI_SERVICE_PORT=8081
+    ports:
+      - "127.0.0.1:8081:8081"
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
