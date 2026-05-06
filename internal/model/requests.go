@@ -1,6 +1,10 @@
 package model
 
-import "github.com/google/uuid"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
 
 // RegisterRequest represents a user registration request
 type RegisterRequest struct {
@@ -46,4 +50,19 @@ type CreatePostRequest struct {
 	LinkID  uuid.UUID `json:"link_id" validate:"required"`
 	Persona string    `json:"persona" validate:"required"`
 	Format  string    `json:"format" validate:"required,oneof=single thread hot_take question story"`
+}
+
+// LinkWithProduct combines affiliate link data with product info
+type LinkWithProduct struct {
+	ID          uuid.UUID `json:"id"`
+	ProductID   uuid.UUID `json:"product_id"`
+	OriginalURL string    `json:"original_url"`
+	ShortSlug   string    `json:"short_slug"`
+	Platform    string    `json:"platform"`
+	Status      string    `json:"status"`
+	ClickCount  int       `json:"click_count"`
+	ProductName string    `json:"product_name"`
+	Price       float64   `json:"price"`
+	Category    string    `json:"category"`
+	CreatedAt   time.Time `json:"created_at"`
 }

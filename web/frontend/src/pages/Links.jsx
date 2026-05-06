@@ -10,11 +10,7 @@ export default function Links() {
   const [adding, setAdding] = useState(false);
   const [message, setMessage] = useState('');
 
-  useEffect(() => {
-    loadLinks();
-  }, []);
-
-  const loadLinks = async () => {
+  async function loadLinks() {
     try {
       const { data } = await api.get('/links');
       setLinks(data.links || []);
@@ -23,7 +19,11 @@ export default function Links() {
     } finally {
       setLoading(false);
     }
-  };
+  }
+
+  useEffect(() => {
+    void Promise.resolve().then(loadLinks);
+  }, []);
 
   const handleBulkAdd = async (e) => {
     e.preventDefault();

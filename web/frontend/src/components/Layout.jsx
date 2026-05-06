@@ -1,5 +1,5 @@
 import { Outlet, Link, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Link2, FileText, LogOut } from 'lucide-react';
+import { LayoutDashboard, Link2, FileText, LogOut, UserCircle } from 'lucide-react';
 
 export default function Layout() {
   const navigate = useNavigate();
@@ -23,6 +23,7 @@ export default function Layout() {
           <NavItem to="/" icon={<LayoutDashboard size={18} />} label="Dashboard" />
           <NavItem to="/links" icon={<Link2 size={18} />} label="Links" />
           <NavItem to="/posts" icon={<FileText size={18} />} label="Posts" />
+          <NavItem to="/accounts" icon={<UserCircle size={18} />} label="Accounts" />
         </nav>
 
         <button

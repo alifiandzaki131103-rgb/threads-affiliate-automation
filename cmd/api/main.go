@@ -13,10 +13,12 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/alifiandzaki131103-rgb/threads-affiliate-automation/internal/ai"
 	"github.com/alifiandzaki131103-rgb/threads-affiliate-automation/internal/config"
 	"github.com/alifiandzaki131103-rgb/threads-affiliate-automation/internal/database"
 	"github.com/alifiandzaki131103-rgb/threads-affiliate-automation/internal/handler"
 	"github.com/alifiandzaki131103-rgb/threads-affiliate-automation/internal/middleware"
+	"github.com/alifiandzaki131103-rgb/threads-affiliate-automation/internal/queue"
 )
 
 func main() {
@@ -66,6 +68,11 @@ func main() {
 	authHandler := handler.NewAuthHandler(pool, cfg)
 	linkHandler := handler.NewLinkHandler(pool, rdb)
 
+	aiClient := ai.NewClient(cfg.AI.APIURL)
+	queueClient := queue.NewClient(fmt.Sprintf("%s:%s", cfg.Redis.Host, cfg.Redis.Port))
+	accountHandler := handler.NewAccountHandler(pool)
+	postHandler := handler.NewPostHandler(pool, rdb, aiClient, queueClient)
+
 	// Public routes
 	api := app.Group("/api")
 	auth := api.Group("/auth")
@@ -78,6 +85,16 @@ func main() {
 	protected.Post("/links/bulk", linkHandler.BulkAddLinks)
 	protected.Get("/links", linkHandler.ListLinks)
 	protected.Delete("/links/:id", linkHandler.DeleteLink)
+
+	protected.Post("/accounts", accountHandler.CreateAccount)
+	protected.Get("/accounts", accountHandler.ListAccounts)
+	protected.Put("/accounts/:id", accountHandler.UpdateAccount)
+	protected.Delete("/accounts/:id", accountHandler.DeleteAccount)
+
+	protected.Get("/posts", postHandler.ListPosts)
+	protected.Post("/posts/generate", postHandler.GenerateContent)
+	protected.Post("/posts/:id/approve", postHandler.ApprovePost)
+	protected.Post("/posts/:id/publish", postHandler.PublishNow)
 
 	// Graceful shutdown
 	go func() {

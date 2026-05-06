@@ -56,6 +56,35 @@ func GetLinksByUserID(ctx context.Context, pool *pgxpool.Pool, userID uuid.UUID)
 	return links, nil
 }
 
+// GetLinksWithProductByUserID returns affiliate links with product info for all products owned by a user.
+func GetLinksWithProductByUserID(ctx context.Context, pool *pgxpool.Pool, userID uuid.UUID) ([]model.LinkWithProduct, error) {
+	rows, err := pool.Query(ctx, `
+		SELECT al.id, al.product_id, al.original_url, al.short_slug, al.platform, al.status, al.click_count,
+		       COALESCE(p.name, 'Unknown'), COALESCE(p.price, 0)::float8, COALESCE(p.category, ''), al.created_at
+		FROM affiliate_links al
+		JOIN products p ON al.product_id = p.id
+		WHERE p.user_id = $1
+		ORDER BY al.created_at DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var links []model.LinkWithProduct
+	for rows.Next() {
+		var l model.LinkWithProduct
+		if err := rows.Scan(&l.ID, &l.ProductID, &l.OriginalURL, &l.ShortSlug, &l.Platform,
+			&l.Status, &l.ClickCount, &l.ProductName, &l.Price, &l.Category, &l.CreatedAt); err != nil {
+			return nil, err
+		}
+		links = append(links, l)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return links, nil
+}
+
 // GetLinkBySlug returns an affiliate link by short slug.
 func GetLinkBySlug(ctx context.Context, pool *pgxpool.Pool, slug string) (*model.AffiliateLink, error) {
 	link := &model.AffiliateLink{}

@@ -4,6 +4,7 @@ import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
 import Links from './pages/Links';
 import Posts from './pages/Posts';
+import Accounts from './pages/Accounts';
 import Layout from './components/Layout';
 
 function PrivateRoute({ children }) {
@@ -21,6 +22,7 @@ function App() {
           <Route index element={<Dashboard />} />
           <Route path="links" element={<Links />} />
           <Route path="posts" element={<Posts />} />
+          <Route path="accounts" element={<Accounts />} />
         </Route>
       </Routes>
     </BrowserRouter>

@@ -115,7 +115,7 @@ func Load() *Config {
 			RedirectURI: getEnv("THREADS_REDIRECT_URI", "http://localhost:3000/auth/callback"),
 		},
 		AI: AIConfig{
-			APIURL: getEnv("AI_API_URL", ""),
+			APIURL: getEnv("AI_API_URL", "http://ai-service:8081"),
 			APIKey: getEnv("AI_API_KEY", ""),
 		},
 		Shortener: ShortenerConfig{

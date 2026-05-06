@@ -97,6 +97,17 @@ services:
       - "127.0.0.1:8081:8081"
     restart: unless-stopped
 
+  frontend:
+    build:
+      context: .
+      dockerfile: deployments/Dockerfile.frontend
+    ports:
+      - "8090:8090"
+    depends_on:
+      - api
+      - shortener
+    restart: unless-stopped
+
 volumes:
   pgdata:
   redisdata:

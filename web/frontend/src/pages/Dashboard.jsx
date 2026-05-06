@@ -6,11 +6,7 @@ export default function Dashboard() {
   const [stats, setStats] = useState({ links: 0, posts: 0, clicks: 0 });
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    loadStats();
-  }, []);
-
-  const loadStats = async () => {
+  async function loadStats() {
     try {
       const { data } = await api.get('/links');
       const totalClicks = (data.links || []).reduce((sum, l) => sum + (l.click_count || 0), 0);
@@ -24,7 +20,11 @@ export default function Dashboard() {
     } finally {
       setLoading(false);
     }
-  };
+  }
+
+  useEffect(() => {
+    void Promise.resolve().then(loadStats);
+  }, []);
 
   return (
     <div>
