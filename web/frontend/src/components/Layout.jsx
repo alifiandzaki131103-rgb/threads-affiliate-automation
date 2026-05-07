@@ -1,5 +1,5 @@
 import { Outlet, Link, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Link2, FileText, LogOut, UserCircle } from 'lucide-react';
+import { LayoutDashboard, BarChart3, Link2, FileText, LogOut, UserCircle } from 'lucide-react';
 
 export default function Layout() {
   const navigate = useNavigate();
@@ -21,6 +21,7 @@ export default function Layout() {
 
         <nav className="flex-1 space-y-1">
           <NavItem to="/" icon={<LayoutDashboard size={18} />} label="Dashboard" />
+          <NavItem to="/analytics" icon={<BarChart3 size={18} />} label="Analytics" />
           <NavItem to="/links" icon={<Link2 size={18} />} label="Links" />
           <NavItem to="/posts" icon={<FileText size={18} />} label="Posts" />
           <NavItem to="/accounts" icon={<UserCircle size={18} />} label="Accounts" />

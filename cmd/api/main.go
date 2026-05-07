@@ -103,6 +103,13 @@ func main() {
 	protected.Post("/posts/:id/approve", postHandler.ApprovePost)
 	protected.Post("/posts/:id/publish", postHandler.PublishNow)
 
+	// Reports & Insights (Phase 3)
+	reportHandler := handler.NewReportHandler(pool)
+	protected.Get("/reports", reportHandler.ListReports)
+	protected.Get("/reports/latest", reportHandler.GetLatestReport)
+	protected.Get("/reports/:id", reportHandler.GetReportByID)
+	protected.Get("/insights", reportHandler.GetInsights)
+
 	// Graceful shutdown
 	go func() {
 		sigChan := make(chan os.Signal, 1)

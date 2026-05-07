@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
@@ -52,6 +53,7 @@ func (h *Handlers) RegisterHandlers(mux *asynq.ServeMux) {
 	mux.HandleFunc(TaskWeeklyLearning, h.HandleWeeklyLearning)
 	mux.HandleFunc(TaskAutoPublish, h.HandleAutoPublish)
 	mux.HandleFunc(TaskAutoReply, h.HandleAutoReply)
+	mux.HandleFunc(TaskCircuitBreakerCheck, h.HandleCircuitBreakerCheck)
 }
 
 // HandleGenerateContent generates AI content for a product link
@@ -92,7 +94,7 @@ func (h *Handlers) HandleGenerateContent(ctx context.Context, t *asynq.Task) err
 		INSERT INTO posts (id, account_id, link_id, content, link_placement, persona, format, scheduled_at, status, created_at)
 		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, NOW())`,
 		payload.AccountID, payload.LinkID, result.Content, placement, persona, format,
-		generateScheduleTime(), "approved",
+		h.generateScheduleTime(ctx, payload.UserID), "approved",
 	)
 	if err != nil {
 		return fmt.Errorf("save post: %w", err)
@@ -327,13 +329,321 @@ func checkLinkHealth(client *http.Client, url string) string {
 func (h *Handlers) HandleWeeklyLearning(ctx context.Context, t *asynq.Task) error {
 	log.Println("[WeeklyLearning] Running weekly self-learning analysis...")
 
-	// TODO: Analyze last 7 days performance
-	// - Group posts by persona, format, time, platform
-	// - Identify top 20% vs bottom 20%
-	// - Update content_templates scores
-	// - Generate weekly report
+	// Get all post performance data from last 7 days
+	posts, err := repository.GetPostPerformanceLast7Days(ctx, h.pool)
+	if err != nil {
+		return fmt.Errorf("get post performance: %w", err)
+	}
 
-	log.Println("[WeeklyLearning] Analysis complete (placeholder)")
+	if len(posts) == 0 {
+		log.Println("[WeeklyLearning] No posts found in last 7 days, skipping")
+		return nil
+	}
+
+	// Group posts by user_id
+	userPosts := make(map[uuid.UUID][]repository.PostPerformance)
+	for _, p := range posts {
+		userPosts[p.UserID] = append(userPosts[p.UserID], p)
+	}
+
+	wib := time.FixedZone("WIB", 7*60*60)
+	now := time.Now().In(wib)
+	weekEnd := now
+	weekStart := now.AddDate(0, 0, -7)
+
+	for userID, userPostList := range userPosts {
+		if err := h.processUserLearning(ctx, userID, userPostList, weekStart, weekEnd); err != nil {
+			log.Printf("[WeeklyLearning] ERROR processing user %s: %v", userID, err)
+			continue
+		}
+	}
+
+	log.Printf("[WeeklyLearning] Analysis complete for %d users", len(userPosts))
+	return nil
+}
+
+// processUserLearning processes learning data for a single user
+func (h *Handlers) processUserLearning(ctx context.Context, userID uuid.UUID, posts []repository.PostPerformance, weekStart, weekEnd time.Time) error {
+	// Calculate overall average clicks
+	totalClicks := 0
+	totalViews := 0
+	for _, p := range posts {
+		totalClicks += p.Clicks
+		totalViews += p.Views
+	}
+	overallAvgClicks := float64(totalClicks) / float64(len(posts))
+	if overallAvgClicks == 0 {
+		overallAvgClicks = 1 // avoid division by zero
+	}
+
+	// Group by persona
+	type groupStats struct {
+		totalClicks int
+		totalPosts  int
+		totalViews  int
+	}
+	personaStats := make(map[string]*groupStats)
+	formatStats := make(map[string]*groupStats)
+	hourStats := make(map[int]*groupStats)
+
+	var topPostID *uuid.UUID
+	topPostClicks := -1
+
+	for _, p := range posts {
+		// Persona stats
+		if _, ok := personaStats[p.Persona]; !ok {
+			personaStats[p.Persona] = &groupStats{}
+		}
+		personaStats[p.Persona].totalClicks += p.Clicks
+		personaStats[p.Persona].totalPosts++
+		personaStats[p.Persona].totalViews += p.Views
+
+		// Format stats
+		if _, ok := formatStats[p.Format]; !ok {
+			formatStats[p.Format] = &groupStats{}
+		}
+		formatStats[p.Format].totalClicks += p.Clicks
+		formatStats[p.Format].totalPosts++
+		formatStats[p.Format].totalViews += p.Views
+
+		// Hour stats
+		if _, ok := hourStats[p.HourWIB]; !ok {
+			hourStats[p.HourWIB] = &groupStats{}
+		}
+		hourStats[p.HourWIB].totalClicks += p.Clicks
+		hourStats[p.HourWIB].totalPosts++
+
+		// Track top post
+		if p.Clicks > topPostClicks {
+			topPostClicks = p.Clicks
+			postID := p.PostID
+			topPostID = &postID
+		}
+	}
+
+	// Update persona weights
+	bestPersona := ""
+	bestPersonaAvg := 0.0
+	for persona, stats := range personaStats {
+		avgClicks := float64(stats.totalClicks) / float64(stats.totalPosts)
+		weight := avgClicks / overallAvgClicks
+		weight = clampWeight(weight)
+		avgEngagement := float64(stats.totalViews) / float64(stats.totalPosts)
+
+		if err := repository.UpsertPersonaWeight(ctx, h.pool, userID, persona, weight, stats.totalPosts, stats.totalClicks, avgEngagement); err != nil {
+			log.Printf("[WeeklyLearning] ERROR upserting persona weight for user %s persona %s: %v", userID, persona, err)
+		}
+
+		if avgClicks > bestPersonaAvg {
+			bestPersonaAvg = avgClicks
+			bestPersona = persona
+		}
+	}
+
+	// Update format weights
+	bestFormat := ""
+	bestFormatAvg := 0.0
+	for format, stats := range formatStats {
+		avgClicks := float64(stats.totalClicks) / float64(stats.totalPosts)
+		weight := avgClicks / overallAvgClicks
+		weight = clampWeight(weight)
+		avgEngagement := float64(stats.totalViews) / float64(stats.totalPosts)
+
+		if err := repository.UpsertFormatWeight(ctx, h.pool, userID, format, weight, stats.totalPosts, stats.totalClicks, avgEngagement); err != nil {
+			log.Printf("[WeeklyLearning] ERROR upserting format weight for user %s format %s: %v", userID, format, err)
+		}
+
+		if avgClicks > bestFormatAvg {
+			bestFormatAvg = avgClicks
+			bestFormat = format
+		}
+	}
+
+	// Update time weights
+	bestHour := 0
+	bestHourAvg := 0.0
+	for hour, stats := range hourStats {
+		avgClicks := float64(stats.totalClicks) / float64(stats.totalPosts)
+		weight := avgClicks / overallAvgClicks
+		weight = clampWeight(weight)
+
+		if err := repository.UpsertTimeWeight(ctx, h.pool, userID, hour, weight, stats.totalPosts, stats.totalClicks); err != nil {
+			log.Printf("[WeeklyLearning] ERROR upserting time weight for user %s hour %d: %v", userID, hour, err)
+		}
+
+		if avgClicks > bestHourAvg {
+			bestHourAvg = avgClicks
+			bestHour = hour
+		}
+	}
+
+	// Generate recommendations
+	recommendations := generateRecommendations(bestPersona, bestFormat, bestHour, posts, overallAvgClicks)
+
+	// Insert weekly report
+	report := &repository.WeeklyReport{
+		UserID:          userID,
+		WeekStart:       weekStart,
+		WeekEnd:         weekEnd,
+		TotalPosts:      len(posts),
+		TotalClicks:     totalClicks,
+		TotalViews:      totalViews,
+		BestPersona:     bestPersona,
+		BestFormat:      bestFormat,
+		BestHour:        bestHour,
+		TopPostID:       topPostID,
+		Recommendations: recommendations,
+	}
+
+	if err := repository.InsertWeeklyReport(ctx, h.pool, report); err != nil {
+		return fmt.Errorf("insert weekly report: %w", err)
+	}
+
+	log.Printf("[WeeklyLearning] User %s: %d posts, best persona=%s, best format=%s, best hour=%d WIB",
+		userID, len(posts), bestPersona, bestFormat, bestHour)
+	return nil
+}
+
+// clampWeight clamps a weight value between 0.2 and 3.0
+func clampWeight(w float64) float64 {
+	if w < 0.2 {
+		return 0.2
+	}
+	if w > 3.0 {
+		return 3.0
+	}
+	return w
+}
+
+// generateRecommendations creates actionable recommendations based on learning data
+func generateRecommendations(bestPersona, bestFormat string, bestHour int, posts []repository.PostPerformance, overallAvg float64) []string {
+	var recs []string
+
+	if bestPersona != "" {
+		recs = append(recs, fmt.Sprintf("Persona '%s' performs best - use it more frequently", bestPersona))
+	}
+	if bestFormat != "" {
+		recs = append(recs, fmt.Sprintf("Format '%s' gets the most clicks - prioritize this format", bestFormat))
+	}
+	recs = append(recs, fmt.Sprintf("Best posting hour is %d:00 WIB - schedule more posts around this time", bestHour))
+
+	if len(posts) < 7 {
+		recs = append(recs, "Post more frequently - aim for at least 1 post per day for better data")
+	}
+
+	if overallAvg < 1.0 {
+		recs = append(recs, "Click rates are low - try more engaging CTAs and different link placements")
+	}
+
+	return recs
+}
+
+// HandleCircuitBreakerCheck checks circuit breaker conditions and manages account safety (periodic)
+func (h *Handlers) HandleCircuitBreakerCheck(ctx context.Context, t *asynq.Task) error {
+	log.Println("[CircuitBreaker] Running circuit breaker check...")
+
+	// Step 1: Reset daily post counts if needed
+	if err := repository.ResetDailyPostCountsIfNeeded(ctx, h.pool); err != nil {
+		log.Printf("[CircuitBreaker] ERROR resetting daily post counts: %v", err)
+	}
+
+	// Step 2: Check flagged accounts and trigger circuit breaker
+	flaggedAccounts, err := repository.GetFlaggedAccounts(ctx, h.pool)
+	if err != nil {
+		return fmt.Errorf("get flagged accounts: %w", err)
+	}
+
+	// Track flagged users for global circuit break check
+	userFlagCount := make(map[uuid.UUID]int)
+
+	for _, account := range flaggedAccounts {
+		// Check if we already have a recent CB event for this account
+		hasRecent, err := repository.HasRecentCBEvent(ctx, h.pool, account.AccountID)
+		if err != nil {
+			log.Printf("[CircuitBreaker] ERROR checking recent CB event for account %s: %v", account.AccountID, err)
+			continue
+		}
+
+		if !hasRecent {
+			// Insert new circuit breaker event
+			cooldownUntil := time.Now().Add(24 * time.Hour)
+			err = repository.InsertCircuitBreakerEvent(ctx, h.pool, account.AccountID,
+				"account_flagged", "critical",
+				"Account flagged - automatic circuit breaker triggered",
+				cooldownUntil)
+			if err != nil {
+				log.Printf("[CircuitBreaker] ERROR inserting CB event for account %s: %v", account.AccountID, err)
+				continue
+			}
+
+			// Pause the account
+			if err := repository.PauseAccount(ctx, h.pool, account.AccountID); err != nil {
+				log.Printf("[CircuitBreaker] ERROR pausing account %s: %v", account.AccountID, err)
+			}
+
+			log.Printf("[CircuitBreaker] Account %s flagged - paused with 24h cooldown", account.AccountID)
+		}
+
+		userFlagCount[account.UserID]++
+	}
+
+	// Step 3: Global circuit break - if 2+ accounts flagged for same user
+	for userID, count := range userFlagCount {
+		if count >= 2 {
+			// Also check DB for historical count
+			dbCount, err := repository.CountFlaggedAccountsForUserLast24h(ctx, h.pool, userID)
+			if err != nil {
+				log.Printf("[CircuitBreaker] ERROR counting flagged accounts for user %s: %v", userID, err)
+				continue
+			}
+
+			if dbCount >= 2 {
+				// Pause ALL user's accounts
+				if err := repository.PauseAllUserAccounts(ctx, h.pool, userID); err != nil {
+					log.Printf("[CircuitBreaker] ERROR pausing all accounts for user %s: %v", userID, err)
+					continue
+				}
+				log.Printf("[CircuitBreaker] GLOBAL CIRCUIT BREAK for user %s - %d accounts flagged, all paused", userID, dbCount)
+			}
+		}
+	}
+
+	// Step 4: Auto-resolve expired cooldowns
+	expiredEvents, err := repository.GetUnresolvedExpiredCBEvents(ctx, h.pool)
+	if err != nil {
+		return fmt.Errorf("get unresolved expired CB events: %w", err)
+	}
+
+	for _, event := range expiredEvents {
+		// Check if there are new flags since cooldown started
+		hasNewFlags, err := repository.HasNewFlagsSinceCooldown(ctx, h.pool, event.AccountID, event.ID)
+		if err != nil {
+			log.Printf("[CircuitBreaker] ERROR checking new flags for account %s: %v", event.AccountID, err)
+			continue
+		}
+
+		if hasNewFlags {
+			log.Printf("[CircuitBreaker] Account %s has new flags - not auto-resolving", event.AccountID)
+			continue
+		}
+
+		// Resolve the event
+		if err := repository.ResolveCBEvent(ctx, h.pool, event.ID); err != nil {
+			log.Printf("[CircuitBreaker] ERROR resolving CB event %s: %v", event.ID, err)
+			continue
+		}
+
+		// Reactivate account with reduced limits
+		if err := repository.ReactivateAccountWithReducedLimit(ctx, h.pool, event.AccountID); err != nil {
+			log.Printf("[CircuitBreaker] ERROR reactivating account %s: %v", event.AccountID, err)
+			continue
+		}
+
+		log.Printf("[CircuitBreaker] Auto-resolved CB event %s - account %s reactivated with reduced limits", event.ID, event.AccountID)
+	}
+
+	log.Printf("[CircuitBreaker] Check complete: %d flagged accounts processed, %d expired events checked",
+		len(flaggedAccounts), len(expiredEvents))
 	return nil
 }
 
@@ -568,9 +878,10 @@ func (h *Handlers) updatePostStatus(ctx context.Context, postID interface{}, sta
 	_, _ = h.pool.Exec(ctx, `UPDATE posts SET status = $1 WHERE id = $2`, status, postID)
 }
 
-// generateScheduleTime generates a random posting time for today/tomorrow
-// Spread between 06:00-23:00 WIB
-func generateScheduleTime() time.Time {
+// generateScheduleTime generates a posting time using weighted random selection
+// based on the user's time_weights from the database. Falls back to uniform random
+// if no weights exist for the user.
+func (h *Handlers) generateScheduleTime(ctx context.Context, userID uuid.UUID) time.Time {
 	wib := time.FixedZone("WIB", 7*60*60)
 	now := time.Now().In(wib)
 
@@ -580,8 +891,7 @@ func generateScheduleTime() time.Time {
 		targetDay = now.Add(24 * time.Hour)
 	}
 
-	// Random hour between 6-22
-	hour := 6 + rand.Intn(17) // 6 to 22
+	hour := h.pickWeightedHour(ctx, userID)
 	// Random minute
 	minute := rand.Intn(60)
 
@@ -596,4 +906,60 @@ func generateScheduleTime() time.Time {
 	}
 
 	return scheduled
+}
+
+// pickWeightedHour selects an hour (6-22) using weighted random selection from time_weights.
+// Falls back to uniform random if no weights exist for the user.
+func (h *Handlers) pickWeightedHour(ctx context.Context, userID uuid.UUID) int {
+	type hourWeight struct {
+		Hour   int
+		Weight float64
+	}
+
+	rows, err := h.pool.Query(ctx,
+		`SELECT hour_wib, weight FROM time_weights WHERE user_id = $1 AND hour_wib >= 6 AND hour_wib <= 22`,
+		userID,
+	)
+	if err != nil {
+		log.Printf("[generateScheduleTime] Error querying time_weights: %v, using uniform random", err)
+		return 6 + rand.Intn(17)
+	}
+	defer rows.Close()
+
+	var weights []hourWeight
+	for rows.Next() {
+		var hw hourWeight
+		if err := rows.Scan(&hw.Hour, &hw.Weight); err != nil {
+			log.Printf("[generateScheduleTime] Error scanning time_weight row: %v", err)
+			continue
+		}
+		weights = append(weights, hw)
+	}
+
+	// Fallback: if no weights found, use uniform random
+	if len(weights) == 0 {
+		return 6 + rand.Intn(17)
+	}
+
+	// Weighted random selection: sum all weights, pick random in [0, sum)
+	var totalWeight float64
+	for _, hw := range weights {
+		totalWeight += hw.Weight
+	}
+
+	if totalWeight <= 0 {
+		return 6 + rand.Intn(17)
+	}
+
+	r := rand.Float64() * totalWeight
+	var cumulative float64
+	for _, hw := range weights {
+		cumulative += hw.Weight
+		if r < cumulative {
+			return hw.Hour
+		}
+	}
+
+	// Shouldn't reach here, but return last hour as safety
+	return weights[len(weights)-1].Hour
 }

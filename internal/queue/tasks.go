@@ -12,16 +12,17 @@ import (
 
 // Task types
 const (
-	TaskGenerateContent  = "content:generate"
-	TaskPublishPost      = "post:publish"
-	TaskReplyDrop        = "post:reply_drop"
-	TaskCheckReplies     = "engagement:check_replies"
-	TaskCollectAnalytics = "analytics:collect"
-	TaskHealthCheckLinks = "links:health_check"
-	TaskLinkHealthCheck  = "link:health_check"
-	TaskWeeklyLearning   = "ai:weekly_learning"
-	TaskAutoPublish      = "auto:publish"
-	TaskAutoReply        = "auto:reply"
+	TaskGenerateContent     = "content:generate"
+	TaskPublishPost         = "post:publish"
+	TaskReplyDrop           = "post:reply_drop"
+	TaskCheckReplies        = "engagement:check_replies"
+	TaskCollectAnalytics    = "analytics:collect"
+	TaskHealthCheckLinks    = "links:health_check"
+	TaskLinkHealthCheck     = "link:health_check"
+	TaskWeeklyLearning      = "ai:weekly_learning"
+	TaskAutoPublish         = "auto:publish"
+	TaskAutoReply           = "auto:reply"
+	TaskCircuitBreakerCheck = "circuit:check"
 )
 
 // GenerateContentPayload is the payload for content generation tasks
@@ -117,6 +118,11 @@ func NewCheckRepliesTask() *asynq.Task {
 	return asynq.NewTask(TaskCheckReplies, nil, asynq.MaxRetry(1), asynq.Timeout(30*time.Second))
 }
 
+// NewCircuitBreakerCheckTask creates a periodic task to check circuit breaker conditions
+func NewCircuitBreakerCheckTask() *asynq.Task {
+	return asynq.NewTask(TaskCircuitBreakerCheck, nil, asynq.MaxRetry(1), asynq.Timeout(60*time.Second))
+}
+
 // NewCollectAnalyticsTask creates a periodic analytics collection task
 func NewCollectAnalyticsTask() *asynq.Task {
 	return asynq.NewTask(TaskCollectAnalytics, nil, asynq.MaxRetry(2), asynq.Timeout(60*time.Second))
@@ -168,6 +174,12 @@ func (s *Scheduler) RegisterPeriodicTasks() error {
 	_, err = s.scheduler.Register("0 * * * *", asynq.NewTask(TaskHealthCheckLinks, nil, asynq.MaxRetry(1), asynq.Timeout(30*time.Second)))
 	if err != nil {
 		return fmt.Errorf("register health_check_links: %w", err)
+	}
+
+	// Circuit breaker check every 15 minutes
+	_, err = s.scheduler.Register("*/15 * * * *", NewCircuitBreakerCheckTask())
+	if err != nil {
+		return fmt.Errorf("register circuit_breaker_check: %w", err)
 	}
 
 	return nil
