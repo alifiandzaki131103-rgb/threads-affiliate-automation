@@ -28,6 +28,9 @@ type ThreadsAccount struct {
 	Status            string     `json:"status" db:"status"` // active, paused, flagged
 	AutoMode          bool       `json:"auto_mode" db:"auto_mode"`
 	AutoModeEnabledAt *time.Time `json:"auto_mode_enabled_at,omitempty" db:"auto_mode_enabled_at"`
+	DailyPostCount    int        `json:"daily_post_count" db:"daily_post_count"`
+	MaxDailyPosts     int        `json:"max_daily_posts" db:"max_daily_posts"`
+	FlaggedCount      int        `json:"flagged_count" db:"flagged_count"`
 	CreatedAt         time.Time  `json:"created_at" db:"created_at"`
 }
 

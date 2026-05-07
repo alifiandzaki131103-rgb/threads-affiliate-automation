@@ -24,7 +24,8 @@ func CreateAccount(ctx context.Context, pool *pgxpool.Pool, account *model.Threa
 
 func GetAccountsByUserID(ctx context.Context, pool *pgxpool.Pool, userID uuid.UUID) ([]model.ThreadsAccount, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT id, user_id, threads_user_id, persona, niche, status, created_at
+		SELECT id, user_id, threads_user_id, persona, niche, status, auto_mode,
+		       COALESCE(daily_post_count, 0), COALESCE(max_daily_posts, 25), COALESCE(flagged_count, 0), created_at
 		FROM threads_accounts WHERE user_id = $1 ORDER BY created_at DESC`, userID)
 	if err != nil {
 		return nil, err
@@ -34,7 +35,8 @@ func GetAccountsByUserID(ctx context.Context, pool *pgxpool.Pool, userID uuid.UU
 	var accounts []model.ThreadsAccount
 	for rows.Next() {
 		var a model.ThreadsAccount
-		if err := rows.Scan(&a.ID, &a.UserID, &a.ThreadsUserID, &a.Persona, &a.Niche, &a.Status, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.UserID, &a.ThreadsUserID, &a.Persona, &a.Niche, &a.Status,
+			&a.AutoMode, &a.DailyPostCount, &a.MaxDailyPosts, &a.FlaggedCount, &a.CreatedAt); err != nil {
 			return nil, err
 		}
 		accounts = append(accounts, a)
