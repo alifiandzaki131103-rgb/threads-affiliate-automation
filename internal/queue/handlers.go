@@ -68,7 +68,7 @@ func (h *Handlers) HandleGenerateContent(ctx context.Context, t *asynq.Task) err
 	// Pick random persona and format
 	personas := []string{"honest_friend", "hot_take", "problem_solver", "curious_explorer", "lifestyle_sharer", "comparison_nerd"}
 	formats := []string{"single", "single", "single", "hot_take", "question", "story"} // weighted toward single
-	placements := []string{"direct", "direct", "reply_drop", "bio", "question_trigger"} // weighted toward direct
+	placements := []string{"direct", "direct", "direct", "direct", "direct", "direct", "direct", "reply_drop", "reply_drop", "question_trigger"} // 70% direct, 20% reply_drop, 10% question_trigger
 
 	persona := personas[rand.Intn(len(personas))]
 	format := formats[rand.Intn(len(formats))]
@@ -653,7 +653,7 @@ func (h *Handlers) HandleAutoPublish(ctx context.Context, t *asynq.Task) error {
 
 	// Query posts with status='approved' and scheduled_at <= now()
 	rows, err := h.pool.Query(ctx, `
-		SELECT p.id, p.account_id, p.content
+		SELECT p.id, p.account_id, p.content, p.link_placement, COALESCE(p.link_id::text, '')
 		FROM posts p
 		JOIN threads_accounts ta ON p.account_id = ta.id
 		WHERE p.status = 'approved'
@@ -667,15 +667,17 @@ func (h *Handlers) HandleAutoPublish(ctx context.Context, t *asynq.Task) error {
 	defer rows.Close()
 
 	type duePost struct {
-		ID        string
-		AccountID string
-		Content   string
+		ID            string
+		AccountID     string
+		Content       string
+		LinkPlacement string
+		LinkID        string
 	}
 
 	var duePosts []duePost
 	for rows.Next() {
 		var p duePost
-		if err := rows.Scan(&p.ID, &p.AccountID, &p.Content); err != nil {
+		if err := rows.Scan(&p.ID, &p.AccountID, &p.Content, &p.LinkPlacement, &p.LinkID); err != nil {
 			return fmt.Errorf("scan post: %w", err)
 		}
 		duePosts = append(duePosts, p)
@@ -739,6 +741,38 @@ func (h *Handlers) HandleAutoPublish(ctx context.Context, t *asynq.Task) error {
 		}
 
 		log.Printf("[AutoPublish] Post %s published as thread %s", p.ID, threadID)
+
+		// Step 4: If link_placement is reply_drop, enqueue reply with affiliate link
+		if p.LinkPlacement == "reply_drop" && p.LinkID != "" {
+			// Get short slug for the link
+			var shortSlug string
+			err := h.pool.QueryRow(ctx, `SELECT short_slug FROM affiliate_links WHERE id = $1`, p.LinkID).Scan(&shortSlug)
+			if err == nil && shortSlug != "" {
+				shortURL := fmt.Sprintf("https://%s/s/%s", h.cfg.Shortener.Domain, shortSlug)
+				replyTemplates := []string{
+					"Nih linknya buat yang nanya: %s 👆",
+					"Link produknya: %s",
+					"Cek di sini: %s ✨",
+					"Buat yang mau cek: %s 🔗",
+				}
+				replyText := fmt.Sprintf(replyTemplates[rand.Intn(len(replyTemplates))], shortURL)
+
+				replyPayload := &ReplyDropPayload{
+					PostID:        uuid.MustParse(p.ID),
+					ThreadID:      threadID,
+					ReplyContent:  replyText,
+					ThreadsUserID: threadsUserID,
+					AccessToken:   accessToken,
+				}
+				// Delay reply 2-8 minutes after publish
+				replyDelay := time.Duration(2+rand.Intn(6)) * time.Minute
+				task, err := NewReplyDropTask(replyPayload, replyDelay)
+				if err == nil {
+					h.queueClient.Enqueue(task)
+					log.Printf("[AutoPublish] Reply drop scheduled for post %s in %v", p.ID, replyDelay)
+				}
+			}
+		}
 	}
 
 	log.Printf("[AutoPublish] Done processing %d posts", len(duePosts))
