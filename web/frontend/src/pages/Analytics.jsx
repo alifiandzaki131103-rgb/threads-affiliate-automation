@@ -16,8 +16,8 @@ export default function Analytics() {
     setLoading(true);
     try {
       const [analyticsRes, insightsRes] = await Promise.all([
-        api.get(`/api/analytics?period=${period}`),
-        api.get('/api/insights'),
+        api.get(`/analytics?period=${period}`),
+        api.get('/insights'),
       ]);
       setAnalytics(analyticsRes.data);
       setInsights(insightsRes.data);
