@@ -42,7 +42,7 @@ func GetDashboardStats(ctx context.Context, pool *pgxpool.Pool, userID uuid.UUID
 		SELECT 
 			COALESCE(COUNT(*), 0),
 			COALESCE(SUM(CASE WHEN p.status = 'published' THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN p.status IN ('draft', 'pending_review') THEN 1 ELSE 0 END), 0)
+			COALESCE(SUM(CASE WHEN p.status IN ('draft', 'pending_review', 'approved') THEN 1 ELSE 0 END), 0)
 		FROM posts p
 		JOIN threads_accounts ta ON p.account_id = ta.id
 		WHERE ta.user_id = $1`, userID).Scan(&stats.TotalPosts, &stats.PublishedPosts, &stats.PendingPosts)
